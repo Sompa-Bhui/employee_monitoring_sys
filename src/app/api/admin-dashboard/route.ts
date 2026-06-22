@@ -1,15 +1,155 @@
 import { NextResponse } from 'next/server';
 import { getSupabaseAdmin } from '@/lib/supabase-admin';
 
+function formatDuration(seconds: number) {
+  const total = Math.max(0, Math.round(Number(seconds) || 0));
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  const secs = total % 60;
+
+  if (hours > 0) {
+    return `${hours}h ${minutes}m`;
+  }
+
+  if (minutes > 0) {
+    return secs > 0 ? `${minutes}m ${secs}s` : `${minutes}m`;
+  }
+
+  return `${secs}s`;
+}
+
+function aggregateLogs(logs: any[]) {
+  const sorted = [...logs].sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+  const totalUsageSeconds = sorted.reduce((sum, log) => sum + (Number(log.time_spent) || 0), 0);
+  const totalVisits = sorted.reduce((sum, log) => sum + (Number(log.visit_count) || 0), 0);
+  const websiteSet = new Set(sorted.map((log) => log.domain).filter(Boolean));
+
+  const domainStats = new Map<string, { domain: string; totalVisits: number; totalTime: number; latestUrl: string; lastVisit: string }>();
+  for (const log of sorted) {
+    const domain = log.domain || 'unknown';
+    const entry = domainStats.get(domain) || {
+      domain,
+      totalVisits: 0,
+      totalTime: 0,
+      latestUrl: '',
+      lastVisit: ''
+    };
+
+    entry.totalVisits += Number(log.visit_count) || 0;
+    entry.totalTime += Number(log.time_spent) || 0;
+    entry.latestUrl = entry.latestUrl || log.url || '';
+    entry.lastVisit = entry.lastVisit || log.created_at;
+    domainStats.set(domain, entry);
+  }
+
+  const recentWebsiteActivity = Array.from(domainStats.values())
+    .sort((a, b) => {
+      if (b.totalVisits !== a.totalVisits) {
+        return b.totalVisits - a.totalVisits;
+      }
+      return b.totalTime - a.totalTime;
+    })
+    .slice(0, 20);
+
+  const mostVisited = recentWebsiteActivity[0] || null;
+  const latestLog = sorted[0] || null;
+
+  return {
+    latestLog,
+    recentLogs: sorted.slice(0, 50),
+    recentWebsiteActivity,
+    totalUsageSeconds,
+    totalVisits,
+    websitesTracked: websiteSet.size,
+    mostVisitedWebsite: mostVisited?.domain || null
+  };
+}
+
+function buildBrowserHistoryFallback(logs: any[]) {
+  return logs.slice(0, 50).map((log) => ({
+    title: log.url || log.domain || 'Tracked website',
+    url: log.url || '',
+    domain: log.domain || 'unknown',
+    visitTime: log.created_at,
+    timeSpent: Number(log.time_spent) || 0,
+    visitCount: Number(log.visit_count) || 0
+  }));
+}
+
+function normalizeValue(value: any) {
+  return String(value || '').trim().toLowerCase();
+}
+
+function resolveTrackingIdentity(user: any, logs: any[], snapshots: any[]) {
+  const directLogs = logs.filter((log: any) => log.user_id === user.id);
+  const directSnapshots = snapshots.filter((snapshot: any) => snapshot.user_id === user.id);
+
+  if (directLogs.length || directSnapshots.length) {
+    return {
+      trackingUserId: user.id,
+      trackingIds: [user.id],
+      source: 'direct-id'
+    };
+  }
+
+  const userEmail = normalizeValue(user.email);
+  const userName = normalizeValue(user.name);
+
+  const snapshotMatches = snapshots.filter((snapshot: any) => {
+    const snapshotEmail = normalizeValue(snapshot.email);
+    const snapshotName = normalizeValue(snapshot.name);
+    return (
+      (userEmail && snapshotEmail === userEmail) ||
+      (userName && snapshotName === userName)
+    );
+  });
+
+  const candidateIds = new Set<string>();
+  for (const snapshot of snapshotMatches) {
+    if (snapshot?.user_id) {
+      candidateIds.add(snapshot.user_id);
+    }
+  }
+
+  if (!candidateIds.size && userEmail) {
+    for (const log of logs) {
+      const logSnapshot = snapshots.find((snapshot: any) => snapshot.user_id === log.user_id);
+      if (normalizeValue(logSnapshot?.email) === userEmail) {
+        candidateIds.add(log.user_id);
+      }
+    }
+  }
+
+  if (!candidateIds.size && userName) {
+    for (const log of logs) {
+      const logSnapshot = snapshots.find((snapshot: any) => snapshot.user_id === log.user_id);
+      if (normalizeValue(logSnapshot?.name) === userName) {
+        candidateIds.add(log.user_id);
+      }
+    }
+  }
+
+  const trackingIds = Array.from(candidateIds);
+  return {
+    trackingUserId: trackingIds[0] || user.id,
+    trackingIds: trackingIds.length ? trackingIds : [user.id],
+    source: trackingIds.length ? 'email-or-name-fallback' : 'fallback-user-id'
+  };
+}
+
 export async function GET(req: Request) {
   try {
     const url = new URL(req.url);
     const employeeId = url.searchParams.get('employeeId');
     const supabaseAdmin = getSupabaseAdmin();
 
-    const [usersResult, logsResult] = await Promise.all([
+    const [usersResult, logsResult, snapshotsResult] = await Promise.all([
       supabaseAdmin.from('users').select('*').order('created_at', { ascending: false }),
-      supabaseAdmin.from('activity_logs').select('user_id,time_spent,visit_count,created_at,url,domain')
+      supabaseAdmin.from('activity_logs').select('user_id,time_spent,visit_count,created_at,url,domain'),
+      supabaseAdmin
+        .from('tracking_snapshots')
+        .select('*')
+        .order('updated_at', { ascending: false })
     ]);
 
     if (usersResult.error) {
@@ -24,16 +164,29 @@ export async function GET(req: Request) {
 
     const users = usersResult.data || [];
     const logs = logsResult.data || [];
+    const snapshots = snapshotsResult.error ? [] : (snapshotsResult.data || []);
+
+    const snapshotByUser = snapshots.reduce((acc: Record<string, any>, snapshot: any) => {
+      if (snapshot?.user_id && !acc[snapshot.user_id]) {
+        acc[snapshot.user_id] = snapshot;
+      }
+      return acc;
+    }, {});
+
     console.log('[admin-dashboard] Records fetched:', {
       employeeId,
-      count: logs.length
+      users: users.length,
+      logs: logs.length,
+      snapshots: snapshots.length
     });
-    console.log('[admin-dashboard] Selected employee id:', employeeId);
 
     const totalUsers = users.length;
     const activeUsers = users.filter((user: any) => user.status === 'active').length;
     const tenMinsAgo = new Date(Date.now() - 10 * 60 * 1000).toISOString();
-    const onlineUsers = new Set(logs.filter((log: any) => log.created_at >= tenMinsAgo).map((log: any) => log.user_id)).size;
+    const onlineUsers = new Set([
+      ...logs.filter((log: any) => log.created_at >= tenMinsAgo).map((log: any) => log.user_id),
+      ...snapshots.filter((snapshot: any) => snapshot.updated_at >= tenMinsAgo).map((snapshot: any) => snapshot.user_id)
+    ].filter(Boolean)).size;
 
     const todayStart = new Date();
     todayStart.setHours(0, 0, 0, 0);
@@ -41,73 +194,90 @@ export async function GET(req: Request) {
       .filter((log: any) => log.created_at >= todayStart.toISOString())
       .reduce((sum: number, log: any) => sum + (Number(log.time_spent) || 0), 0);
 
-    const todayTimeByUser = logs.reduce((map: Record<string, number>, log: any) => {
-      if (!log.user_id) return map;
-      const seconds = Number(log.time_spent) || 0;
-      map[log.user_id] = (map[log.user_id] || 0) + seconds;
-      return map;
-    }, {} as Record<string, number>);
+    const byUser = users.map((user: any) => {
+      const trackingIdentity = resolveTrackingIdentity(user, logs, snapshots);
+      const userLogs = logs
+        .filter((log: any) => trackingIdentity.trackingIds.includes(log.user_id))
+        .sort((a: any, b: any) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+      const aggregate = aggregateLogs(userLogs);
+      const snapshot = trackingIdentity.trackingIds
+        .map((trackingId: string) => snapshotByUser[trackingId])
+        .find(Boolean) || snapshotByUser[user.id];
+      const productiveSeconds = Number(snapshot?.productive_seconds ?? aggregate.totalUsageSeconds);
+      const unproductiveSeconds = Number(snapshot?.unproductive_seconds ?? 0);
+      const totalUsageSeconds = Number(snapshot?.total_usage_seconds ?? aggregate.totalUsageSeconds);
+      const productivityPercent = Number(snapshot?.productivity_percent ?? (
+        productiveSeconds + unproductiveSeconds > 0
+          ? Math.round((productiveSeconds / Math.max(1, productiveSeconds + unproductiveSeconds)) * 100)
+          : 0
+      ));
 
-    // Aggregate visit counts per user and most visited domain
-    const visitCountByUser: Record<string, number> = {};
-    const websiteSetByUser: Record<string, Set<string>> = {};
-    const domainCountByUser: Record<string, Record<string, number>> = {};
-    logs.forEach((log: any) => {
-      if (!log.user_id) return;
-      visitCountByUser[log.user_id] = (visitCountByUser[log.user_id] || 0) + (Number(log.visit_count) || 0);
-      websiteSetByUser[log.user_id] = websiteSetByUser[log.user_id] || new Set<string>();
-      if (log.domain) {
-        websiteSetByUser[log.user_id].add(log.domain);
-      }
-      domainCountByUser[log.user_id] = domainCountByUser[log.user_id] || {};
-      domainCountByUser[log.user_id][log.domain] = (domainCountByUser[log.user_id][log.domain] || 0) + (Number(log.time_spent) || 0);
+      return {
+        ...user,
+        currentWebsite: snapshot?.current_url || aggregate.latestLog?.url || '',
+        currentDomain: snapshot?.current_domain || aggregate.latestLog?.domain || '',
+        currentTitle: snapshot?.current_title || aggregate.latestLog?.url || '',
+        currentTimeSpent: Number(snapshot?.current_time_spent ?? aggregate.latestLog?.time_spent ?? 0),
+        productiveSeconds,
+        unproductiveSeconds,
+        totalUsageSeconds,
+        productivityPercent,
+        websitesTracked: Number(snapshot?.websites_tracked ?? aggregate.websitesTracked),
+        totalVisits: Number(snapshot?.total_visits ?? aggregate.totalVisits),
+        mostVisitedWebsite: snapshot?.most_visited_website || aggregate.mostVisitedWebsite,
+        recentWebsiteActivity: snapshot?.recent_activity || aggregate.recentWebsiteActivity,
+        recentBrowserHistory: snapshot?.recent_browser_history || buildBrowserHistoryFallback(userLogs),
+        todayTime: totalUsageSeconds,
+        websiteCount: Number(snapshot?.websites_tracked ?? aggregate.websitesTracked),
+        mostVisited: snapshot?.most_visited_website || aggregate.mostVisitedWebsite,
+        logs: userLogs,
+        liveUpdatedAt: snapshot?.updated_at || aggregate.latestLog?.created_at || null,
+        trackingUserId: trackingIdentity.trackingUserId,
+        trackingIds: trackingIdentity.trackingIds,
+        trackingIdentitySource: trackingIdentity.source
+      };
     });
-
-    const mostVisitedByUser: Record<string, string | null> = {};
-    Object.keys(domainCountByUser).forEach((uid) => {
-      const domains = domainCountByUser[uid];
-      const top = Object.entries(domains).sort((a: any, b: any) => b[1] - a[1])[0];
-      mostVisitedByUser[uid] = top ? top[0] : null;
-    });
-
-    const employees = users.map((user: any) => ({
-      ...user,
-      todayTime: todayTimeByUser[user.id] || 0,
-      websiteCount: websiteSetByUser[user.id]?.size || 0,
-      totalVisits: visitCountByUser[user.id] || 0,
-      mostVisited: mostVisitedByUser[user.id] || null,
-      productivity: 0
-    }));
 
     const response: any = {
       stats: {
         totalUsers,
         activeUsers,
         onlineUsers,
-        totalHours: `${Math.floor(todaySeconds / 3600)}h`
+        totalHours: formatDuration(todaySeconds)
       },
-      employees
+      employees: byUser
     };
 
     if (employeeId) {
       const employee = users.find((user: any) => user.id === employeeId);
-      const allEmployeeLogs = logs
-        .filter((log: any) => log.user_id === employeeId)
-        .sort((a: any, b: any) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
-      const employeeLogs = allEmployeeLogs.slice(0, 50);
-      const employeeTime = allEmployeeLogs.reduce((sum: number, log: any) => sum + (Number(log.time_spent) || 0), 0);
-      console.log('[admin-dashboard] Employee details logs prepared:', {
-        employeeId,
-        count: employeeLogs.length
-      });
+      const directDetails = byUser.find((entry: any) => entry.id === employeeId);
+      const trackingDetails = byUser.find((entry: any) => Array.isArray(entry.trackingIds) && entry.trackingIds.includes(employeeId));
+      const details = directDetails || trackingDetails || null;
 
       response.employeeDetails = {
-        employee,
-        logs: employeeLogs,
-        totalTime: employeeTime,
-        websiteCount: new Set(allEmployeeLogs.map((log: any) => log.domain).filter(Boolean)).size,
-        visitCount: allEmployeeLogs.reduce((sum: number, log: any) => sum + (Number(log.visit_count) || 0), 0),
-        productivity: 0
+        employee: details || employee || null,
+        currentWebsite: details?.currentWebsite || '',
+        currentDomain: details?.currentDomain || '',
+        currentTitle: details?.currentTitle || '',
+        currentTimeSpent: details?.currentTimeSpent || 0,
+        productiveSeconds: details?.productiveSeconds || 0,
+        unproductiveSeconds: details?.unproductiveSeconds || 0,
+        totalUsageSeconds: details?.totalUsageSeconds || 0,
+        productivityPercent: details?.productivityPercent || 0,
+        websitesTracked: details?.websitesTracked || 0,
+        totalVisits: details?.totalVisits || 0,
+        mostVisitedWebsite: details?.mostVisitedWebsite || '',
+        recentWebsiteActivity: details?.recentWebsiteActivity || [],
+        recentBrowserHistory: details?.recentBrowserHistory || [],
+        logs: details?.logs || [],
+        totalTime: details?.totalUsageSeconds || 0,
+        websiteCount: details?.websitesTracked || 0,
+        visitCount: details?.totalVisits || 0,
+        productivity: details?.productivityPercent || 0,
+        liveUpdatedAt: details?.liveUpdatedAt || null,
+        trackingUserId: details?.trackingUserId || employee?.id || employeeId,
+        trackingIds: details?.trackingIds || [employee?.id || employeeId],
+        trackingIdentitySource: details?.trackingIdentitySource || (details ? 'resolved' : 'unresolved')
       };
     }
 

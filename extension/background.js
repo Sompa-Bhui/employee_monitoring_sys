@@ -815,6 +815,19 @@ async function saveTabActivity(snapshot = createTrackingSnapshot(), reason = 'ac
       
       // Also send ping to dashboard to update online status
       await sendPingToDashboard(userId);
+      syncDashboardSnapshot({
+        email: await getStorageValue(STORAGE_KEYS.EMAIL),
+        name: await getStorageValue(STORAGE_KEYS.NAME),
+        currentUrl: snapshot.url,
+        currentDomain: snapshot.domain,
+        currentTimeSpent: Math.max(1, Math.round((now - snapshot.startTime) / 1000)),
+        productiveSeconds: productiveSecondsToday,
+        unproductiveSeconds: unproductiveSecondsToday,
+        totalUsageSeconds: productiveSecondsToday + unproductiveSecondsToday,
+        totalVisits: totalVisitsToday
+      }).catch((error) => {
+        console.warn('[Extension] Snapshot sync after activity insert failed:', error?.message || error);
+      });
     } else {
       await updateRecentHistoryRecord(snapshot.visitId, {
         title: snapshot.title || snapshot.url,
@@ -847,6 +860,104 @@ async function sendPingToDashboard(userId) {
     console.log('[Extension] Ping sent to dashboard');
   } catch (error) {
     console.error('[Extension] Ping failed:', error);
+  }
+}
+
+async function syncDashboardSnapshot(status = null) {
+  try {
+    const userId = await getStorageValue(STORAGE_KEYS.USER_ID);
+    if (!userId) {
+      return;
+    }
+
+    const storedName = await getStorageValue(STORAGE_KEYS.NAME);
+    const storedEmail = await getStorageValue(STORAGE_KEYS.EMAIL);
+    const trackedHistoryRecords = await getRecentHistoryRecords();
+    const liveTotals = getTrackedTotals();
+    const activeStatus = status || {
+      email: storedEmail,
+      name: storedName,
+      currentUrl,
+      currentDomain,
+      currentTimeSpent: isTracking && currentDomain && tabStartTime !== null
+        ? Math.floor((Date.now() - tabStartTime) / 1000)
+        : 0,
+      productiveSeconds: liveTotals.productiveSeconds,
+      unproductiveSeconds: liveTotals.unproductiveSeconds,
+      totalUsageSeconds: liveTotals.totalUsageSeconds,
+      totalVisits: liveTotals.totalVisits
+    };
+
+    const liveCurrentWebsite = activeStatus.currentUrl || currentUrl || '';
+    const liveCurrentDomain = activeStatus.currentDomain || currentDomain || '';
+    const liveCurrentTimeSpent = Number(activeStatus.currentTimeSpent || 0);
+    const productiveSeconds = Number(activeStatus.productiveSeconds || 0);
+    const unproductiveSeconds = Number(activeStatus.unproductiveSeconds || 0);
+    const totalUsageSeconds = Number(activeStatus.totalUsageSeconds || 0);
+    const totalVisits = Number(activeStatus.totalVisits || 0);
+    const productivityPercent = productiveSeconds + unproductiveSeconds > 0
+      ? Math.round((productiveSeconds / Math.max(1, productiveSeconds + unproductiveSeconds)) * 100)
+      : 0;
+
+    const historyRows = trackedHistoryRecords
+      .filter((record) => record?.url)
+      .slice(0, 50)
+      .map((record) => ({
+        title: record.title || record.url,
+        url: record.url || '',
+        domain: record.domain || getDomainFromUrl(record.url || ''),
+        visitTime: record.visitTime || new Date().toISOString(),
+        timeSpent: Number(record.timeSpent || 0),
+        visitCount: Number(record.visitCount || 0)
+      }));
+
+    const domainStats = new Map();
+    for (const row of historyRows) {
+      const entry = domainStats.get(row.domain) || { domain: row.domain, totalVisits: 0, totalTime: 0 };
+      entry.totalVisits += Number(row.visitCount || 0);
+      entry.totalTime += Number(row.timeSpent || 0);
+      domainStats.set(row.domain, entry);
+    }
+
+    const mostVisitedEntry = Array.from(domainStats.values()).sort((a, b) => {
+      if (b.totalVisits !== a.totalVisits) return b.totalVisits - a.totalVisits;
+      return b.totalTime - a.totalTime;
+    })[0];
+
+    const payload = {
+      user_id: userId,
+      email: storedEmail || activeStatus.email || null,
+      name: storedName || activeStatus.name || null,
+      current_url: liveCurrentWebsite,
+      current_domain: liveCurrentDomain,
+      current_title: currentTitle || liveCurrentWebsite || null,
+      current_time_spent: liveCurrentTimeSpent,
+      productive_seconds: productiveSeconds,
+      unproductive_seconds: unproductiveSeconds,
+      total_usage_seconds: totalUsageSeconds,
+      total_visits: totalVisits,
+      productivity_percent: productivityPercent,
+      websites_tracked: domainStats.size,
+      most_visited_website: mostVisitedEntry?.domain || liveCurrentDomain || null,
+      recent_activity: historyRows.slice(0, 20).map((row) => ({
+        domain: row.domain,
+        url: row.url,
+        timeSpent: row.timeSpent,
+        visitCount: row.visitCount,
+        visitTime: row.visitTime
+      })),
+      recent_browser_history: historyRows
+    };
+
+    await fetch(CONFIG.API_ENDPOINT.replace('/api/activity', '/api/tracking-snapshot'), {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(payload)
+    });
+  } catch (error) {
+    console.warn('[Extension] Dashboard snapshot sync failed:', error?.message || error);
   }
 }
 
@@ -980,6 +1091,9 @@ async function handleRuntimeMessage(request, sender, sendResponse) {
         unproductiveSeconds: status.unproductiveSeconds,
         totalVisits: status.totalVisits,
         currentVisitId
+      });
+      syncDashboardSnapshot(status).catch((error) => {
+        console.warn('[Extension] Snapshot sync after getStatus failed:', error?.message || error);
       });
       sendResponse(status);
     }

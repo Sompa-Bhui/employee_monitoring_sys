@@ -8,6 +8,7 @@ import { Loader2 } from 'lucide-react';
 const ADMIN_EMAIL = 'bhuisompa001@gmail.com';
 const ADMIN_NAME = 'Sompa Bhui';
 const AUTH_TIMEOUT_MS = 10000;
+const LOCAL_PREVIEW_MODE = process.env.NODE_ENV !== 'production';
 
 function withTimeout<T>(promise: PromiseLike<T>, label: string): Promise<T> {
   return new Promise((resolve, reject) => {
@@ -24,7 +25,7 @@ function withTimeout<T>(promise: PromiseLike<T>, label: string): Promise<T> {
 
 export default function Home() {
   const router = useRouter();
-  const [status, setStatus] = useState<'loading' | 'unauthenticated' | 'error'>('loading');
+  const [status, setStatus] = useState<'loading' | 'unauthenticated' | 'error' | 'preview'>('loading');
   const [error, setError] = useState<string | null>(null);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -32,6 +33,12 @@ export default function Home() {
 
   useEffect(() => {
     console.log('[home-page] page initialization');
+
+    if (LOCAL_PREVIEW_MODE) {
+      setStatus('preview');
+      return;
+    }
+
     async function checkUser() {
       console.log('[home-page] auth check start');
       try {
@@ -177,6 +184,38 @@ export default function Home() {
       <div className="flex min-h-screen flex-col items-center justify-center bg-slate-50 gap-4 p-6">
         <Loader2 className="animate-spin text-indigo-600" size={40} />
         <p className="text-slate-500 font-medium font-sans">Verifying session...</p>
+      </div>
+    );
+  }
+
+  if (status === 'preview') {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-slate-950 p-6 text-white">
+        <div className="w-full max-w-2xl rounded-3xl border border-white/10 bg-white/5 p-8 shadow-2xl backdrop-blur">
+          <p className="text-xs font-semibold uppercase tracking-[0.35em] text-cyan-300">Local preview mode</p>
+          <h1 className="mt-3 text-4xl font-black">Employee Monitoring System</h1>
+          <p className="mt-3 max-w-xl text-sm text-white/70">
+            Supabase auth is bypassed locally so the dashboard stays visible even when the database
+            keys are not configured yet.
+          </p>
+          <div className="mt-8 flex flex-col gap-3 sm:flex-row">
+            <button
+              onClick={() => router.replace('/admin')}
+              className="rounded-2xl bg-cyan-400 px-5 py-3 font-semibold text-slate-950 transition hover:bg-cyan-300"
+            >
+              Open Admin Dashboard
+            </button>
+            <button
+              onClick={() => router.replace('/employee')}
+              className="rounded-2xl border border-white/15 bg-white/5 px-5 py-3 font-semibold text-white transition hover:bg-white/10"
+            >
+              Open Employee Dashboard
+            </button>
+          </div>
+          <p className="mt-6 text-xs text-white/45">
+            To test real authentication, set up the Supabase env vars and run the app in production mode.
+          </p>
+        </div>
       </div>
     );
   }
