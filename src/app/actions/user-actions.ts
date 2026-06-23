@@ -97,9 +97,38 @@ export async function updateUserRoleAction(userId: string, newRole: string) {
 export async function deleteUserAction(userId: string) {
   try {
     const supabaseAdmin = getSupabaseAdmin();
+    const authLookupResponse = await supabaseAdmin.auth.admin.getUserById(userId);
 
-    await supabaseAdmin.auth.admin.deleteUser(userId);
-    await supabaseAdmin.from('users').delete().eq('id', userId);
+    if (authLookupResponse.error) {
+      const isMissingAuthUser =
+        authLookupResponse.error.status === 404 ||
+        authLookupResponse.error.code === 'user_not_found';
+
+      if (!isMissingAuthUser) {
+        throw new Error(`Auth lookup failed: ${authLookupResponse.error.message}`);
+      }
+    } else if (authLookupResponse.data?.user) {
+      const authDeleteResponse = await supabaseAdmin.auth.admin.deleteUser(userId);
+
+      if (authDeleteResponse.error) {
+        throw new Error(`Auth delete failed: ${authDeleteResponse.error.message}`);
+      }
+    }
+
+    const activityLogsDeleteResponse = await supabaseAdmin
+      .from('activity_logs')
+      .delete()
+      .eq('user_id', userId);
+
+    if (activityLogsDeleteResponse.error) {
+      throw new Error(`Activity logs delete failed: ${activityLogsDeleteResponse.error.message}`);
+    }
+
+    const usersDeleteResponse = await supabaseAdmin.from('users').delete().eq('id', userId);
+
+    if (usersDeleteResponse.error) {
+      throw new Error(`Users delete failed: ${usersDeleteResponse.error.message}`);
+    }
 
     revalidatePath('/admin');
     return { success: true };
