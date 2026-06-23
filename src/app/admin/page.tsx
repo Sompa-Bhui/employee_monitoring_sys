@@ -19,7 +19,7 @@ import {
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { fetchAdminDashboard, fetchEmployeeDetails } from '@/lib/stats';
-import { createUserAction, deleteUserAction, updateUserRoleAction, toggleUserStatusAction } from '@/app/actions/user-actions';
+import { createUserAction, deleteUserAction, updateUserRoleAction, updateUserTimezoneAction, toggleUserStatusAction } from '@/app/actions/user-actions';
 import { supabase } from '@/lib/supabase';
 
 const ADMIN_EMAIL = 'bhuisompa001@gmail.com';
@@ -60,8 +60,17 @@ export default function AdminDashboard() {
   const [selectedEmployeeId, setSelectedEmployeeId] = useState<string | null>(null);
   const [selectedEmployeeDetails, setSelectedEmployeeDetails] = useState<any | null>(null);
   const [detailsLoading, setDetailsLoading] = useState(false);
-  const [newUser, setNewUser] = useState({ name: '', email: '', role: 'employee', password: '' });
+  const [newUser, setNewUser] = useState({ name: '', email: '', role: 'employee', password: '', timezone: 'Asia/Kolkata' });
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [editingTimezoneUserId, setEditingTimezoneUserId] = useState<string | null>(null);
+  const [timezoneByUserId, setTimezoneByUserId] = useState<Record<string, string>>({});
+  const [timezoneSavingId, setTimezoneSavingId] = useState<string | null>(null);
+  const TIMEZONE_OPTIONS = [
+    { label: 'India (IST)', value: 'Asia/Kolkata' },
+    { label: 'US Eastern', value: 'America/New_York' },
+    { label: 'US Central', value: 'America/Chicago' },
+    { label: 'US Pacific', value: 'America/Los_Angeles' }
+  ];
 
   useEffect(() => {
     void loadData();
@@ -131,6 +140,7 @@ export default function AdminDashboard() {
       const nextEmployees = payload.employees || [];
       setStats(nextStats);
       setEmployees(nextEmployees);
+      setTimezoneByUserId(Object.fromEntries(nextEmployees.map((emp: any) => [emp.id, emp.timezone || 'Asia/Kolkata'])));
 
       if (nextEmployees.length === 0 && nextStats.totalUsers === 0) {
         setError('No users found. Please check your database connection and Supabase policies.');
@@ -171,12 +181,26 @@ export default function AdminDashboard() {
     try {
       await createUserAction(newUser);
       setShowAddModal(false);
-      setNewUser({ name: '', email: '', role: 'employee', password: '' });
+      setNewUser({ name: '', email: '', role: 'employee', password: '', timezone: 'Asia/Kolkata' });
       await loadData();
     } catch (err: any) {
       alert('Error creating user: ' + err.message);
     } finally {
       setIsSubmitting(false);
+    }
+  };
+
+  const handleUpdateTimezone = async (userId: string) => {
+    const timezone = timezoneByUserId[userId] || 'Asia/Kolkata';
+    setTimezoneSavingId(userId);
+    try {
+      await updateUserTimezoneAction(userId, timezone);
+      setEditingTimezoneUserId(null);
+      await loadData();
+    } catch (err: any) {
+      alert('Error updating timezone: ' + err.message);
+    } finally {
+      setTimezoneSavingId(null);
     }
   };
 
@@ -333,6 +357,7 @@ export default function AdminDashboard() {
                           <MenuItem icon={Shield} label="Admin" onClick={() => handleChangeRole(emp.id, 'admin')} disabled={emp.role === 'admin'} />
                           <MenuItem icon={UserIcon} label="Employee" onClick={() => handleChangeRole(emp.id, 'employee')} disabled={emp.role === 'employee'} />
                           <div className="my-1 h-[1px] bg-slate-100" />
+                          <MenuItem icon={Clock} label="Edit Time Zone" onClick={() => setEditingTimezoneUserId(emp.id)} />
                           <MenuItem
                             icon={emp.status === 'active' ? XCircle : CheckCircle}
                             label={emp.status === 'active' ? 'Deactivate' : 'Activate'}
@@ -381,6 +406,7 @@ export default function AdminDashboard() {
             ) : (
               <>
                 <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+                  <InfoCard label="Time Zone" value={selectedEmployeeDetails.employee?.timezone || 'Asia/Kolkata'} />
                   <InfoCard label="Current Website" value={selectedEmployeeDetails.currentWebsite || 'No live website'} />
                   <InfoCard label="Current Domain" value={selectedEmployeeDetails.currentDomain || 'No live domain'} />
                   <InfoCard label="Time Active" value={formatSeconds(selectedEmployeeDetails.currentTimeSpent || 0)} />
@@ -519,6 +545,19 @@ export default function AdminDashboard() {
                   placeholder="Set a secure password"
                 />
               </div>
+              <div>
+                <label className="mb-1 block text-sm font-semibold text-slate-700">Time Zone</label>
+                <select
+                  required
+                  value={newUser.timezone}
+                  onChange={(e) => setNewUser({ ...newUser, timezone: e.target.value })}
+                  className="w-full appearance-none rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500"
+                >
+                  {TIMEZONE_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value}>{option.label}</option>
+                  ))}
+                </select>
+              </div>
               <div className="pt-4 text-xs text-slate-400">
                 <p>Note: The administrator sets the password when creating the user.</p>
               </div>
@@ -531,6 +570,41 @@ export default function AdminDashboard() {
                 <span>Create User Account</span>
               </button>
             </form>
+          </div>
+        </div>
+      )}
+
+      {editingTimezoneUserId && (
+        <div className="fixed inset-0 z-[110] flex items-center justify-center bg-slate-900/40 p-4 backdrop-blur-sm">
+          <div className="w-full max-w-md rounded-2xl bg-white p-8 shadow-2xl">
+            <div className="mb-6 flex items-center justify-between">
+              <h2 className="text-xl font-bold">Edit Time Zone</h2>
+              <button onClick={() => setEditingTimezoneUserId(null)} className="text-slate-400 hover:text-slate-600">
+                <X size={20} />
+              </button>
+            </div>
+            <div className="space-y-4">
+              <div>
+                <label className="mb-1 block text-sm font-semibold text-slate-700">Time Zone</label>
+                <select
+                  value={timezoneByUserId[editingTimezoneUserId] || 'Asia/Kolkata'}
+                  onChange={(e) => setTimezoneByUserId((current) => ({ ...current, [editingTimezoneUserId]: e.target.value }))}
+                  className="w-full appearance-none rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500"
+                >
+                  {TIMEZONE_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value}>{option.label}</option>
+                  ))}
+                </select>
+              </div>
+              <button
+                type="button"
+                disabled={timezoneSavingId === editingTimezoneUserId}
+                onClick={() => handleUpdateTimezone(editingTimezoneUserId)}
+                className="flex w-full items-center justify-center gap-2 rounded-xl bg-indigo-600 py-3 font-bold text-white shadow-lg shadow-indigo-100 transition-all hover:bg-indigo-700 active:scale-[0.98] disabled:opacity-50"
+              >
+                <span>{timezoneSavingId === editingTimezoneUserId ? 'Saving...' : 'Save Time Zone'}</span>
+              </button>
+            </div>
           </div>
         </div>
       )}

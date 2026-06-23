@@ -5,14 +5,14 @@ import { revalidatePath } from 'next/cache';
 
 /**
  * SCHEMA SYNC:
- * users: id, email, name, role, status
+ * users: id, email, name, role, status, timezone
  */
 
-export async function createUserAction(formData: { email: string; name: string; role: string; password: string }) {
-  const { email, name, role, password } = formData;
+export async function createUserAction(formData: { email: string; name: string; role: string; password: string; timezone: string }) {
+  const { email, name, role, password, timezone } = formData;
 
-  if (!email || !name || !role || !password) {
-    throw new Error('Name, email, role, and password are required to create a user.');
+  if (!email || !name || !role || !password || !timezone) {
+    throw new Error('Name, email, role, password, and timezone are required to create a user.');
   }
 
   if (!['admin', 'employee'].includes(role)) {
@@ -47,8 +47,17 @@ export async function createUserAction(formData: { email: string; name: string; 
         email,
         name,
         role,
-        status: 'active'
+        status: 'active',
+        timezone
       });
+    console.log('[createUserAction] public.users upsert payload:', {
+      id: authUser.user.id,
+      email,
+      name,
+      role,
+      status: 'active',
+      timezone
+    });
 
     if (dbError) {
       console.error('[createUserAction] DB Sync Error:', dbError);
@@ -66,6 +75,29 @@ export async function createUserAction(formData: { email: string; name: string; 
     console.error('[createUserAction] Exception:', error.message);
     // Re-throw with the actual error message so the client sees it
     throw new Error(error.message || 'An unexpected error occurred while creating the user.');
+  }
+}
+
+export async function updateUserTimezoneAction(userId: string, timezone: string) {
+  if (!userId || !timezone) {
+    throw new Error('User ID and timezone are required.');
+  }
+
+  try {
+    const supabaseAdmin = getSupabaseAdmin();
+
+    const { error } = await supabaseAdmin
+      .from('users')
+      .update({ timezone })
+      .eq('id', userId);
+
+    if (error) throw new Error(error.message);
+
+    revalidatePath('/admin');
+    return { success: true };
+  } catch (error: any) {
+    console.error('[updateUserTimezoneAction] Error:', error.message);
+    throw new Error(`Timezone Update Failed: ${error.message}`);
   }
 }
 

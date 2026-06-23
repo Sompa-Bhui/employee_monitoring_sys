@@ -24,6 +24,41 @@ export default function EmployeeDashboard() {
     loadUserData();
   }, []);
 
+  function resolveTimezone(value?: string | null) {
+    return value || 'Asia/Kolkata';
+  }
+
+  function getTimezoneLabel(timeZone?: string | null) {
+    switch (resolveTimezone(timeZone)) {
+      case 'Asia/Kolkata':
+        return 'IST';
+      case 'America/New_York':
+        return 'US Eastern';
+      case 'America/Chicago':
+        return 'US Central';
+      case 'America/Los_Angeles':
+        return 'US Pacific';
+      default:
+        return resolveTimezone(timeZone);
+    }
+  }
+
+  function formatInTimezone(value: string | number | Date, timeZone?: string | null) {
+    return new Date(value).toLocaleString([], {
+      timeZone: resolveTimezone(timeZone),
+      dateStyle: 'medium',
+      timeStyle: 'medium'
+    });
+  }
+
+  function formatLocalTime(value: string | number | Date, timeZone?: string | null) {
+    return new Date(value).toLocaleTimeString([], {
+      timeZone: resolveTimezone(timeZone),
+      hour: '2-digit',
+      minute: '2-digit'
+    });
+  }
+
   async function loadUserData() {
     try {
       setLoading(true);
@@ -54,6 +89,7 @@ export default function EmployeeDashboard() {
       }
 
       setUser(profile);
+      const timezone = resolveTimezone(profile.timezone);
       const activityUserId = profile.id || userId;
 
       // 2. Get today's logs
@@ -81,6 +117,7 @@ export default function EmployeeDashboard() {
 
         setStats({ todayTime: totalSec, productivity: avgProd, topDomain: topD });
       }
+      setUser((current: any) => ({ ...current, timezone }));
     } catch (err) {
       console.error('Failed to load employee data:', err);
     } finally {
@@ -109,18 +146,28 @@ export default function EmployeeDashboard() {
             <div className="space-y-3 text-white">
               <div>
                 <p className="text-xs uppercase tracking-[0.2em] text-white/50">Name</p>
-                <p className="font-semibold text-lg">{user?.name || 'Unknown'}</p>
+                <p className="font-semibold text-lg">
+                  {user?.name || 'Unknown'} ({getTimezoneLabel(user?.timezone)})
+                </p>
+              </div>
+              <div>
+                <p className="text-xs uppercase tracking-[0.2em] text-white/50">Local Time</p>
+                <p className="font-semibold text-lg">{formatLocalTime(new Date(), user?.timezone)}</p>
               </div>
               <div>
                 <p className="text-xs uppercase tracking-[0.2em] text-white/50">Email</p>
                 <p className="font-semibold text-lg">{user?.email || 'Unknown'}</p>
               </div>
-              <div>
-                <p className="text-xs uppercase tracking-[0.2em] text-white/50">Role</p>
-                <p className="font-semibold text-lg capitalize">{user?.role || 'Employee'}</p>
+                <div>
+                  <p className="text-xs uppercase tracking-[0.2em] text-white/50">Role</p>
+                  <p className="font-semibold text-lg capitalize">{user?.role || 'Employee'}</p>
+                </div>
+                <div>
+                  <p className="text-xs uppercase tracking-[0.2em] text-white/50">Time Zone</p>
+                  <p className="font-semibold text-lg">{user?.timezone || 'Asia/Kolkata'}</p>
+                </div>
               </div>
             </div>
-          </div>
         </div>
 
         <div className="mb-10 grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3">
@@ -156,10 +203,10 @@ export default function EmployeeDashboard() {
            <div className="space-y-6">
               {history.length > 0 ? history.map((log, i) => (
                 <div key={i} className="flex justify-between items-center bg-white/5 p-4 rounded-xl">
-                   <div>
-                     <div className="font-bold">{log.domain}</div>
-                     <div className="text-xs text-white/40">{new Date(log.created_at).toLocaleTimeString()}</div>
-                   </div>
+                     <div>
+                       <div className="font-bold">{log.domain}</div>
+                     <div className="text-xs text-white/40">{formatInTimezone(log.created_at, user?.timezone)}</div>
+                     </div>
                    <div className="text-right">
                      <div className="font-black">{Math.floor(Number(log.time_spent || 0) / 60)}m {Number(log.time_spent || 0) % 60}s</div>
                    </div>

@@ -18,6 +18,7 @@ const dashboardSuccessMessage = document.getElementById('dashboardSuccessMessage
 
 const avatarInitial = document.getElementById('avatarInitial');
 const userNameEl = document.getElementById('userName');
+const userLocalTimeEl = document.getElementById('userLocalTime');
 const userEmailEl = document.getElementById('userEmail');
 const statusBadge = document.getElementById('statusBadge');
 const statusText = document.getElementById('statusText');
@@ -39,6 +40,7 @@ const recentActivityBody = document.getElementById('recentActivityBody');
 const recentActivityEmpty = document.getElementById('recentActivityEmpty');
 const browserHistoryBody = document.getElementById('browserHistoryBody');
 const browserHistoryEmpty = document.getElementById('browserHistoryEmpty');
+const TIMEZONE_FALLBACK = 'Asia/Kolkata';
 
 let lastStatus = null;
 let latestMetrics = null;
@@ -188,7 +190,34 @@ function formatClock(value) {
     return '-';
   }
 
+  const timezone = lastStatus?.timezone || TIMEZONE_FALLBACK;
   return new Date(value).toLocaleTimeString([], {
+    timeZone: timezone,
+    hour: '2-digit',
+    minute: '2-digit'
+  });
+}
+
+function getTimezoneLabel(timeZone) {
+  console.log('[PopupTimezone] getTimezoneLabel input:', timeZone);
+  switch (timeZone || TIMEZONE_FALLBACK) {
+    case 'Asia/Kolkata':
+      return 'IST';
+    case 'America/New_York':
+      return 'US Eastern';
+    case 'America/Chicago':
+      return 'US Central';
+    case 'America/Los_Angeles':
+      return 'US Pacific';
+    default:
+      return timeZone || TIMEZONE_FALLBACK;
+  }
+}
+
+function formatLocalTime(value, timeZone) {
+  console.log('[PopupTimezone] formatLocalTime input:', { value, timeZone });
+  return new Date(value).toLocaleTimeString([], {
+    timeZone: timeZone || TIMEZONE_FALLBACK,
     hour: '2-digit',
     minute: '2-digit'
   });
@@ -288,6 +317,30 @@ async function fetchActivityLogs(userId, accessToken) {
     count: logs.length
   });
   return logs;
+}
+
+async function fetchEmployeeProfile(userId, accessToken) {
+  const params = new URLSearchParams({
+    select: 'id,email,name,role,status,timezone',
+    id: `eq.${userId}`,
+    limit: '1'
+  });
+
+  const response = await fetch(`${SUPABASE_URL}/rest/v1/users?${params.toString()}`, {
+    headers: {
+      'apikey': SUPABASE_ANON_KEY,
+      'Authorization': `Bearer ${accessToken}`,
+      'Accept': 'application/json'
+    }
+  });
+
+  const payload = await parseJsonResponse(response);
+  console.log('[PopupTimezone] fetched profile payload:', payload);
+  if (!response.ok) {
+    throw new Error(payload?.message || payload?.error?.message || `Failed to load profile (${response.status})`);
+  }
+
+  return Array.isArray(payload) ? payload[0] || null : payload || null;
 }
 
 function searchBrowserHistoryByUrl(url) {
@@ -490,11 +543,18 @@ function renderBrowserHistory(rows) {
 function renderDashboard(status, metrics, browserHistoryRows = latestBrowserHistoryRows) {
   const name = status.name || 'Employee';
   const email = status.email || 'employee@company.com';
+  const timezone = lastStatus?.timezone || status.timezone || TIMEZONE_FALLBACK;
+  console.log('[PopupTimezone] renderDashboard timezone sources:', {
+    statusTimezone: status.timezone,
+    lastStatusTimezone: lastStatus?.timezone,
+    resolvedTimezone: timezone
+  });
   const initial = name.trim().charAt(0).toUpperCase() || 'E';
   const badgeState = status.isTracking ? 'tracking' : 'online';
 
   avatarInitial.textContent = initial;
-  userNameEl.textContent = name;
+  userNameEl.textContent = `${name} (${getTimezoneLabel(timezone)})`;
+  userLocalTimeEl.textContent = formatLocalTime(new Date(), timezone);
   userEmailEl.textContent = `${email} (Employee)`;
   updateStatusBadge(badgeState);
 
@@ -548,6 +608,15 @@ async function loadDashboardData(options = {}) {
       throw new Error('Missing session token. Please sign in again.');
     }
 
+    const profile = await fetchEmployeeProfile(status.userId, accessToken);
+    lastStatus = { ...status, timezone: profile?.timezone || TIMEZONE_FALLBACK };
+    console.log('[PopupTimezone] loadDashboardData timezone state:', {
+      profileTimezone: profile?.timezone,
+      statusTimezone: status.timezone,
+      lastStatusTimezone: lastStatus.timezone
+    });
+    await setStorage('employee_timezone', lastStatus.timezone);
+
     const trackedHistoryRecords = await getTrackedRecentHistory();
     latestTrackedHistoryRecords = trackedHistoryRecords;
     const logs = await fetchActivityLogs(status.userId, accessToken);
@@ -595,13 +664,38 @@ async function handleLogin(event) {
       userId: user.id,
       email: user.email || email,
       name: user.user_metadata?.full_name || user.email || email,
-      token: accessToken
+      token: accessToken,
+      timezone: null
     };
+
+    try {
+      const params = new URLSearchParams({
+        select: 'timezone',
+        id: `eq.${user.id}`,
+        limit: '1'
+      });
+      const profileResponse = await fetch(`${SUPABASE_URL}/rest/v1/users?${params.toString()}`, {
+        headers: {
+          'apikey': SUPABASE_ANON_KEY,
+          'Authorization': `Bearer ${accessToken}`,
+          'Accept': 'application/json'
+        }
+      });
+      const profilePayload = await parseJsonResponse(profileResponse);
+      console.log('[PopupTimezone] login profile payload:', profilePayload);
+      if (profileResponse.ok && Array.isArray(profilePayload) && profilePayload[0]?.timezone) {
+        userData.timezone = profilePayload[0].timezone;
+      }
+    } catch (_error) {
+      userData.timezone = null;
+    }
 
     await setStorage('employee_user_id', userData.userId);
     await setStorage('session_token', userData.token);
     await setStorage('employee_email', userData.email);
     await setStorage('employee_name', userData.name);
+    await setStorage('employee_timezone', userData.timezone || TIMEZONE_FALLBACK);
+    console.log('[PopupTimezone] stored employee_timezone:', userData.timezone || TIMEZONE_FALLBACK);
 
     const backgroundResponse = await sendMessage('login', userData);
     if (backgroundResponse?.error) {
@@ -628,7 +722,7 @@ async function handleLogout() {
 
   try {
     await sendMessage('logout');
-    await removeStorage(['employee_user_id', 'session_token', 'employee_email', 'employee_name']);
+    await removeStorage(['employee_user_id', 'session_token', 'employee_email', 'employee_name', 'employee_timezone']);
     lastStatus = null;
     latestMetrics = null;
     latestBrowserHistoryRows = [];
@@ -654,11 +748,15 @@ async function refreshLiveTimeOnly() {
 
   try {
     const status = await sendMessage('getStatus');
-    lastStatus = status;
+    lastStatus = {
+      ...lastStatus,
+      ...status,
+      timezone: lastStatus?.timezone || status.timezone || TIMEZONE_FALLBACK
+    };
     const trackedHistoryRecords = await getTrackedRecentHistory();
     latestTrackedHistoryRecords = trackedHistoryRecords;
-    latestMetrics = buildMetrics(trackedHistoryRecords, latestLogs, status);
-    renderDashboard(status, latestMetrics);
+    latestMetrics = buildMetrics(trackedHistoryRecords, latestLogs, lastStatus);
+    renderDashboard(lastStatus, latestMetrics);
   } catch (error) {
     console.error('[Popup] Status refresh error:', error);
   }

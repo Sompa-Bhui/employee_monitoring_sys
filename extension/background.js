@@ -11,6 +11,7 @@ const STORAGE_KEYS = {
   SESSION_TOKEN: 'session_token',
   EMAIL: 'employee_email',
   NAME: 'employee_name',
+  TIMEZONE: 'employee_timezone',
   LAST_PING: 'last_ping_time',
   CURRENT_TAB: 'current_tab_data',
   RECENT_HISTORY: 'recent_browser_history',
@@ -1007,7 +1008,7 @@ async function getStorageValue(key) {
 async function clearUserSession() {
   return new Promise((resolve) => {
     chrome.storage.local.remove(
-      [STORAGE_KEYS.USER_ID, STORAGE_KEYS.SESSION_TOKEN, STORAGE_KEYS.EMAIL, STORAGE_KEYS.NAME],
+      [STORAGE_KEYS.USER_ID, STORAGE_KEYS.SESSION_TOKEN, STORAGE_KEYS.EMAIL, STORAGE_KEYS.NAME, STORAGE_KEYS.TIMEZONE],
       resolve
     );
   });
@@ -1028,6 +1029,13 @@ async function handleRuntimeMessage(request, sender, sendResponse) {
       await setStorageValue(STORAGE_KEYS.SESSION_TOKEN, request.token);
       await setStorageValue(STORAGE_KEYS.EMAIL, request.email);
       await setStorageValue(STORAGE_KEYS.NAME, request.name);
+      await setStorageValue(STORAGE_KEYS.TIMEZONE, request.timezone || 'Asia/Kolkata');
+      console.log('[ExtensionTimezone] login payload:', {
+        userId: request.userId,
+        email: request.email,
+        name: request.name,
+        timezone: request.timezone || 'Asia/Kolkata'
+      });
       isTracking = true;
       await syncCurrentTab();
       sendResponse({ success: true, message: 'Logged in successfully' });
@@ -1071,12 +1079,14 @@ async function handleRuntimeMessage(request, sender, sendResponse) {
       const userId = await getStorageValue(STORAGE_KEYS.USER_ID);
       const email = await getStorageValue(STORAGE_KEYS.EMAIL);
       const name = await getStorageValue(STORAGE_KEYS.NAME);
+      const timezone = await getStorageValue(STORAGE_KEYS.TIMEZONE);
       
       const status = {
         isLoggedIn: !!userId,
         userId,
         email,
         name,
+        timezone,
         isTracking,
         currentUrl,
         currentDomain,
@@ -1090,7 +1100,8 @@ async function handleRuntimeMessage(request, sender, sendResponse) {
         productiveSeconds: status.productiveSeconds,
         unproductiveSeconds: status.unproductiveSeconds,
         totalVisits: status.totalVisits,
-        currentVisitId
+        currentVisitId,
+        timezone: status.timezone
       });
       syncDashboardSnapshot(status).catch((error) => {
         console.warn('[Extension] Snapshot sync after getStatus failed:', error?.message || error);
