@@ -10,6 +10,8 @@ import {
   ArrowUpRight,
   UserPlus,
   Shield,
+  Eye,
+  EyeOff,
   User as UserIcon,
   X,
   Trash2,
@@ -70,6 +72,9 @@ export default function AdminDashboard() {
   const [resetPasswordForm, setResetPasswordForm] = useState({ password: '', confirmPassword: '' });
   const [resetPasswordSubmitting, setResetPasswordSubmitting] = useState(false);
   const [toasts, setToasts] = useState<Array<{ id: string; type: 'success' | 'error'; message: string }>>([]);
+  const [showCreatePassword, setShowCreatePassword] = useState(false);
+  const [showResetPassword, setShowResetPassword] = useState(false);
+  const [showResetConfirmPassword, setShowResetConfirmPassword] = useState(false);
   const TIMEZONE_OPTIONS = [
     { label: 'India (IST)', value: 'Asia/Kolkata' },
     { label: 'US Eastern', value: 'America/New_York' },
@@ -214,6 +219,7 @@ export default function AdminDashboard() {
       await createUserAction(newUser);
       setShowAddModal(false);
       setNewUser({ name: '', email: '', role: 'employee', password: '', timezone: 'Asia/Kolkata' });
+      setShowCreatePassword(false);
       await loadData();
     } catch (err: any) {
       alert('Error creating user: ' + err.message);
@@ -251,6 +257,8 @@ export default function AdminDashboard() {
 
     setResetPasswordUser(employee);
     setResetPasswordForm({ password: '', confirmPassword: '' });
+    setShowResetPassword(false);
+    setShowResetConfirmPassword(false);
     setShowPasswordModal(true);
   };
 
@@ -286,6 +294,8 @@ export default function AdminDashboard() {
       setShowPasswordModal(false);
       setResetPasswordUser(null);
       setResetPasswordForm({ password: '', confirmPassword: '' });
+      setShowResetPassword(false);
+      setShowResetConfirmPassword(false);
       await loadData();
     } catch (err: any) {
       pushToast('error', err?.message || 'Failed to reset password.');
@@ -624,14 +634,24 @@ export default function AdminDashboard() {
               </div>
               <div>
                 <label className="mb-1 block text-sm font-semibold text-slate-700">Password</label>
-                <input
-                  type="password"
-                  required
-                  value={newUser.password}
-                  onChange={(e) => setNewUser({ ...newUser, password: e.target.value })}
-                  className="w-full rounded-lg border border-slate-200 px-4 py-2 text-sm focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500"
-                  placeholder="Set a secure password"
-                />
+                <div className="relative">
+                  <input
+                    type={showCreatePassword ? 'text' : 'password'}
+                    required
+                    value={newUser.password}
+                    onChange={(e) => setNewUser({ ...newUser, password: e.target.value })}
+                    className="w-full rounded-lg border border-slate-200 px-4 py-2 pr-11 text-sm focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500"
+                    placeholder="Set a secure password"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowCreatePassword((current) => !current)}
+                    className="absolute inset-y-0 right-0 flex items-center px-3 text-slate-400 transition hover:text-slate-600"
+                    aria-label={showCreatePassword ? 'Hide password' : 'Show password'}
+                  >
+                    {showCreatePassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                  </button>
+                </div>
               </div>
               <div>
                 <label className="mb-1 block text-sm font-semibold text-slate-700">Time Zone</label>
@@ -725,29 +745,49 @@ export default function AdminDashboard() {
                 <label className="mb-1 block text-sm font-semibold text-slate-700" htmlFor="new-password">
                   New Password
                 </label>
-                <input
-                  id="new-password"
-                  type="password"
-                  value={resetPasswordForm.password}
-                  onChange={(e) => setResetPasswordForm((current) => ({ ...current, password: e.target.value }))}
-                  className="w-full rounded-xl border border-slate-200 px-4 py-3 text-sm outline-none transition focus:border-indigo-500"
-                  placeholder="Enter new password"
-                  autoComplete="new-password"
-                />
+                <div className="relative">
+                  <input
+                    id="new-password"
+                    type={showResetPassword ? 'text' : 'password'}
+                    value={resetPasswordForm.password}
+                    onChange={(e) => setResetPasswordForm((current) => ({ ...current, password: e.target.value }))}
+                    className="w-full rounded-xl border border-slate-200 px-4 py-3 pr-11 text-sm outline-none transition focus:border-indigo-500"
+                    placeholder="Enter new password"
+                    autoComplete="new-password"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowResetPassword((current) => !current)}
+                    className="absolute inset-y-0 right-0 flex items-center px-3 text-slate-400 transition hover:text-slate-600"
+                    aria-label={showResetPassword ? 'Hide password' : 'Show password'}
+                  >
+                    {showResetPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                  </button>
+                </div>
               </div>
               <div>
                 <label className="mb-1 block text-sm font-semibold text-slate-700" htmlFor="confirm-password">
                   Confirm Password
                 </label>
-                <input
-                  id="confirm-password"
-                  type="password"
-                  value={resetPasswordForm.confirmPassword}
-                  onChange={(e) => setResetPasswordForm((current) => ({ ...current, confirmPassword: e.target.value }))}
-                  className="w-full rounded-xl border border-slate-200 px-4 py-3 text-sm outline-none transition focus:border-indigo-500"
-                  placeholder="Confirm new password"
-                  autoComplete="new-password"
-                />
+                <div className="relative">
+                  <input
+                    id="confirm-password"
+                    type={showResetConfirmPassword ? 'text' : 'password'}
+                    value={resetPasswordForm.confirmPassword}
+                    onChange={(e) => setResetPasswordForm((current) => ({ ...current, confirmPassword: e.target.value }))}
+                    className="w-full rounded-xl border border-slate-200 px-4 py-3 pr-11 text-sm outline-none transition focus:border-indigo-500"
+                    placeholder="Confirm new password"
+                    autoComplete="new-password"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowResetConfirmPassword((current) => !current)}
+                    className="absolute inset-y-0 right-0 flex items-center px-3 text-slate-400 transition hover:text-slate-600"
+                    aria-label={showResetConfirmPassword ? 'Hide password' : 'Show password'}
+                  >
+                    {showResetConfirmPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                  </button>
+                </div>
               </div>
               <div className="flex items-center justify-end gap-3 pt-2">
                 <button
