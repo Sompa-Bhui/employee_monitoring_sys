@@ -5,10 +5,12 @@ let pageStartTime = Date.now();
 let lastUserInteractionAt = Date.now();
 let idlePopupVisible = false;
 let idleAutoCloseTimer = null;
+let globalLastUserInteractionAt = Date.now();
 
 const IDLE_TIMEOUT_MS = 60000;
 const IDLE_CHECK_INTERVAL_MS = 5000;
 const IDLE_AUTO_CLOSE_MS = 30000;
+const GLOBAL_ACTIVITY_STORAGE_KEY = 'browser_wide_last_user_interaction_at';
 
 console.log('[IdleDebug] content-script.js loaded', {
   href: window.location.href,
@@ -32,6 +34,27 @@ function updateLastUserInteraction() {
 
 function markIdleLocally() {
   lastUserInteractionAt = Date.now();
+}
+
+async function loadGlobalLastUserInteraction() {
+  return new Promise((resolve) => {
+    chrome.storage.local.get([GLOBAL_ACTIVITY_STORAGE_KEY], (result) => {
+      const storedValue = Number(result[GLOBAL_ACTIVITY_STORAGE_KEY]);
+      if (Number.isFinite(storedValue) && storedValue > 0) {
+        globalLastUserInteractionAt = storedValue;
+      }
+      resolve(globalLastUserInteractionAt);
+    });
+  });
+}
+
+async function updateGlobalLastUserInteraction(timestamp = Date.now()) {
+  globalLastUserInteractionAt = timestamp;
+  return new Promise((resolve) => {
+    chrome.storage.local.set({ [GLOBAL_ACTIVITY_STORAGE_KEY]: timestamp }, () => {
+      resolve();
+    });
+  });
 }
 
 function closeIdlePopup() {
@@ -215,12 +238,12 @@ function checkIdleState() {
     return;
   }
 
-  const idleFor = Date.now() - lastUserInteractionAt;
+  const idleFor = Date.now() - globalLastUserInteractionAt;
   console.log('[IdleDebug] checkIdleState tick', {
     href: window.location.href,
     idleForMs: idleFor,
     idlePopupVisible,
-    lastUserInteractionAt
+    globalLastUserInteractionAt
   });
   if (idleFor >= IDLE_TIMEOUT_MS && !idlePopupVisible) {
     showIdlePopup();
@@ -230,6 +253,9 @@ function checkIdleState() {
 function handleRealUserActivity() {
   console.log('Popup visible state:', idlePopupVisible);
   updateLastUserInteraction();
+  updateGlobalLastUserInteraction().catch((error) => {
+    console.warn('[IdleDebug] failed to persist global activity timestamp', error);
+  });
 }
 
 document.addEventListener('mousemove', handleRealUserActivity, true);
@@ -240,6 +266,26 @@ document.addEventListener('scroll', handleRealUserActivity, true);
 document.addEventListener('touchstart', handleRealUserActivity, true);
 
 window.setInterval(checkIdleState, IDLE_CHECK_INTERVAL_MS);
+
+chrome.storage.onChanged.addListener((changes, areaName) => {
+  if (areaName !== 'local') {
+    return;
+  }
+
+  const change = changes[GLOBAL_ACTIVITY_STORAGE_KEY];
+  if (!change) {
+    return;
+  }
+
+  const nextValue = Number(change.newValue);
+  if (Number.isFinite(nextValue) && nextValue > 0) {
+    globalLastUserInteractionAt = nextValue;
+  }
+});
+
+loadGlobalLastUserInteraction().catch((error) => {
+  console.warn('[IdleDebug] failed to load global activity timestamp', error);
+});
 
 window.addEventListener('error', (event) => {
   console.error('[IdleDebug] window error', {
