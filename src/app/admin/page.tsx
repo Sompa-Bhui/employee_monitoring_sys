@@ -567,11 +567,10 @@ export default function AdminDashboard() {
               <div className="py-10 text-center text-slate-500">Loading employee details...</div>
             ) : (
               <>
-                <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+                <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-2">
                   <InfoCard label="Time Zone" value={selectedEmployeeDetails.employee?.timezone || 'Asia/Kolkata'} />
                   <InfoCard label="Current Website" value={selectedEmployeeDetails.currentWebsite || 'No live website'} />
                   <InfoCard label="Current Domain" value={selectedEmployeeDetails.currentDomain || 'No live domain'} />
-                  <InfoCard label="Time Active" value={formatSeconds(selectedEmployeeDetails.currentTimeSpent || 0)} />
                   <InfoCard label="Total Usage Time" value={formatSeconds(selectedEmployeeDetails.totalUsageSeconds || selectedEmployeeDetails.totalTime || 0)} />
                   <InfoCard label="Websites Tracked" value={String(selectedEmployeeDetails.websitesTracked || selectedEmployeeDetails.websiteCount || 0)} />
                   <InfoCard label="Total Visits" value={String(selectedEmployeeDetails.totalVisits || selectedEmployeeDetails.visitCount || 0)} />
