@@ -6,6 +6,7 @@ import {
   Users,
   Activity,
   Clock,
+  Search,
   MoreVertical,
   ArrowUpRight,
   UserPlus,
@@ -40,6 +41,7 @@ export default function AdminDashboard() {
   const [selectedEmployeeDetails, setSelectedEmployeeDetails] = useState<any | null>(null);
   const [detailsLoading, setDetailsLoading] = useState(false);
   const detailsRef = useRef<HTMLDivElement | null>(null);
+  const [employeeSearch, setEmployeeSearch] = useState('');
   const [newUser, setNewUser] = useState({ name: '', email: '', role: 'employee', password: '', timezone: 'Asia/Kolkata' });
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [editingTimezoneUserId, setEditingTimezoneUserId] = useState<string | null>(null);
@@ -77,6 +79,27 @@ export default function AdminDashboard() {
       default:
         return resolveTimezone(timeZone);
     }
+  }
+
+  function normalizeSearchValue(value: unknown) {
+    return String(value ?? '').trim().toLowerCase();
+  }
+
+  function matchesEmployeeSearch(emp: any) {
+    const query = normalizeSearchValue(employeeSearch);
+    if (!query) {
+      return true;
+    }
+
+    const searchableValues = [
+      emp?.name,
+      emp?.email,
+      emp?.timezone,
+      getTimezoneLabel(emp?.timezone),
+      emp?.role === 'admin' ? 'admin' : emp?.role === 'hr' ? 'hr' : 'employee'
+    ];
+
+    return searchableValues.some((value) => normalizeSearchValue(value).includes(query));
   }
 
   function pushToast(type: 'success' | 'error', message: string) {
@@ -341,6 +364,8 @@ export default function AdminDashboard() {
     };
   };
 
+  const filteredEmployees = employees.filter((emp) => matchesEmployeeSearch(emp));
+
   if (loading) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-slate-50">
@@ -409,7 +434,19 @@ export default function AdminDashboard() {
 
         <div className="overflow-visible rounded-2xl border border-slate-200 bg-white shadow-sm">
           <div className="border-b border-slate-100 bg-slate-50/50 px-6 py-4">
-            <h3 className="font-bold text-slate-800">All Database Users</h3>
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <h3 className="font-bold text-slate-800">All Database Users</h3>
+              <div className="relative w-full sm:w-[330px]">
+                <Search size={16} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                <input
+                  type="text"
+                  value={employeeSearch}
+                  onChange={(e) => setEmployeeSearch(e.target.value)}
+                  placeholder="Search employee by name or email..."
+                  className="w-full rounded-lg border border-slate-200 bg-white py-2 pl-9 pr-4 text-sm text-slate-900 placeholder:text-slate-400 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                />
+              </div>
+            </div>
           </div>
           <div className="overflow-x-auto">
             <table className="w-full border-collapse text-left">
@@ -425,7 +462,7 @@ export default function AdminDashboard() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
-                {employees.length > 0 ? employees.map((emp) => (
+                {filteredEmployees.length > 0 ? filteredEmployees.map((emp) => (
                   <tr key={emp.id} className="transition-colors hover:bg-slate-50/50">
                     <td className="px-6 py-4">
                       <div className="flex items-center gap-3">
@@ -488,8 +525,8 @@ export default function AdminDashboard() {
                   </tr>
                 )) : (
                   <tr>
-                    <td className="px-6 py-10 text-sm text-slate-500" colSpan={7}>
-                      No employees to display yet.
+                    <td className="px-6 py-10 text-center text-sm text-slate-500" colSpan={7}>
+                      No employees found.
                     </td>
                   </tr>
                 )}
