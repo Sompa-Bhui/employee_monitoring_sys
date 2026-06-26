@@ -18,6 +18,99 @@ function formatDuration(seconds: number) {
   return `${secs}s`;
 }
 
+function parseTimestamp(value: any) {
+  if (!value) {
+    return null;
+  }
+
+  const ms = new Date(value).getTime();
+  return Number.isNaN(ms) ? null : ms;
+}
+
+function formatLastSeen(timestamp: any) {
+  const seenAt = parseTimestamp(timestamp);
+  if (!seenAt) {
+    return 'Unknown';
+  }
+
+  const diffMs = Date.now() - seenAt;
+  if (diffMs < 60 * 1000) {
+    return 'Just now';
+  }
+
+  const diffMins = Math.floor(diffMs / (60 * 1000));
+  if (diffMins < 60) {
+    return `${diffMins} min${diffMins === 1 ? '' : 's'} ago`;
+  }
+
+  const diffHours = Math.floor(diffMins / 60);
+  if (diffHours < 24) {
+    return `${diffHours} hour${diffHours === 1 ? '' : 's'} ago`;
+  }
+
+  if (diffHours < 48) {
+    return 'Yesterday';
+  }
+
+  return new Date(seenAt).toLocaleString();
+}
+
+function resolveTimezone(value: any) {
+  return String(value || 'Asia/Kolkata');
+}
+
+function getTimeZoneParts(date: Date, timeZone: string) {
+  const formatter = new Intl.DateTimeFormat('en-CA', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit'
+  });
+
+  const parts = formatter.formatToParts(date);
+  const getPart = (type: string) => parts.find((part) => part.type === type)?.value || '0';
+
+  return {
+    year: Number(getPart('year')),
+    month: Number(getPart('month')),
+    day: Number(getPart('day'))
+  };
+}
+
+function getTimeZoneOffsetMs(date: Date, timeZone: string) {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false
+  }).formatToParts(date);
+
+  const valueOf = (type: string) => Number(parts.find((part) => part.type === type)?.value || 0);
+  const utcEquivalent = Date.UTC(
+    valueOf('year'),
+    valueOf('month') - 1,
+    valueOf('day'),
+    valueOf('hour'),
+    valueOf('minute'),
+    valueOf('second')
+  );
+
+  return utcEquivalent - date.getTime();
+}
+
+function getLocalDayBounds(date: Date, timeZone: string) {
+  const { year, month, day } = getTimeZoneParts(date, timeZone);
+  const utcGuess = Date.UTC(year, month - 1, day, 0, 0, 0);
+  const offsetAtGuess = getTimeZoneOffsetMs(new Date(utcGuess), timeZone);
+  const startMs = utcGuess - offsetAtGuess;
+  const endMs = startMs + (24 * 60 * 60 * 1000);
+  return { startMs, endMs };
+}
+
 function aggregateLogs(logs: any[]) {
   const sorted = [...logs].sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
   const totalUsageSeconds = sorted.reduce((sum, log) => sum + (Number(log.time_spent) || 0), 0);
@@ -182,12 +275,7 @@ export async function GET(req: Request) {
 
     const totalUsers = users.length;
     const activeUsers = users.filter((user: any) => user.status === 'active').length;
-    const tenMinsAgo = new Date(Date.now() - 10 * 60 * 1000).toISOString();
-    const onlineUsers = new Set([
-      ...logs.filter((log: any) => log.created_at >= tenMinsAgo).map((log: any) => log.user_id),
-      ...snapshots.filter((snapshot: any) => snapshot.updated_at >= tenMinsAgo).map((snapshot: any) => snapshot.user_id)
-    ].filter(Boolean)).size;
-
+    const onlineWindowMs = 2 * 60 * 1000;
     const todayStart = new Date();
     todayStart.setHours(0, 0, 0, 0);
     const todaySeconds = logs
@@ -195,6 +283,7 @@ export async function GET(req: Request) {
       .reduce((sum: number, log: any) => sum + (Number(log.time_spent) || 0), 0);
 
     const byUser = users.map((user: any) => {
+      const timezone = resolveTimezone(user.timezone);
       const trackingIdentity = resolveTrackingIdentity(user, logs, snapshots);
       const userLogs = logs
         .filter((log: any) => trackingIdentity.trackingIds.includes(log.user_id))
@@ -203,9 +292,17 @@ export async function GET(req: Request) {
       const snapshot = trackingIdentity.trackingIds
         .map((trackingId: string) => snapshotByUser[trackingId])
         .find(Boolean) || snapshotByUser[user.id];
-      const productiveSeconds = Number(snapshot?.productive_seconds ?? aggregate.totalUsageSeconds);
+      const productiveSeconds = Number(snapshot?.productive_seconds ?? 0);
       const unproductiveSeconds = Number(snapshot?.unproductive_seconds ?? 0);
-      const totalUsageSeconds = Number(snapshot?.total_usage_seconds ?? aggregate.totalUsageSeconds);
+      const localDayBounds = getLocalDayBounds(new Date(), timezone);
+      const localDayLogs = userLogs.filter((log: any) => {
+        const createdAtMs = parseTimestamp(log.created_at);
+        return createdAtMs !== null && createdAtMs >= localDayBounds.startMs && createdAtMs < localDayBounds.endMs;
+      });
+      const todayUsageSeconds = localDayLogs.reduce((sum: number, log: any) => sum + (Number(log.time_spent) || 0), 0);
+      const latestActivityAt = snapshot?.updated_at || aggregate.latestLog?.created_at || user.updated_at || user.created_at || null;
+      const latestActivityMs = parseTimestamp(latestActivityAt);
+      const onlineStatus = Boolean(latestActivityMs && (Date.now() - latestActivityMs) <= onlineWindowMs);
       const productivityPercent = Number(snapshot?.productivity_percent ?? (
         productiveSeconds + unproductiveSeconds > 0
           ? Math.round((productiveSeconds / Math.max(1, productiveSeconds + unproductiveSeconds)) * 100)
@@ -220,14 +317,18 @@ export async function GET(req: Request) {
         currentTimeSpent: Number(snapshot?.current_time_spent ?? aggregate.latestLog?.time_spent ?? 0),
         productiveSeconds,
         unproductiveSeconds,
-        totalUsageSeconds,
+        totalUsageSeconds: todayUsageSeconds,
         productivityPercent,
+        productiveTimeToday: todayUsageSeconds,
+        lastSeen: onlineStatus ? 'Online' : formatLastSeen(latestActivityAt),
+        lastSeenAt: latestActivityAt,
+        onlineStatus,
         websitesTracked: Number(snapshot?.websites_tracked ?? aggregate.websitesTracked),
         totalVisits: Number(snapshot?.total_visits ?? aggregate.totalVisits),
         mostVisitedWebsite: snapshot?.most_visited_website || aggregate.mostVisitedWebsite,
         recentWebsiteActivity: snapshot?.recent_activity || aggregate.recentWebsiteActivity,
         recentBrowserHistory: snapshot?.recent_browser_history || buildBrowserHistoryFallback(userLogs),
-        todayTime: totalUsageSeconds,
+        todayTime: todayUsageSeconds,
         websiteCount: Number(snapshot?.websites_tracked ?? aggregate.websitesTracked),
         mostVisited: snapshot?.most_visited_website || aggregate.mostVisitedWebsite,
         logs: userLogs,
@@ -242,7 +343,7 @@ export async function GET(req: Request) {
       stats: {
         totalUsers,
         activeUsers,
-        onlineUsers,
+        onlineUsers: byUser.filter((entry: any) => entry.onlineStatus).length,
         totalHours: formatDuration(todaySeconds)
       },
       employees: byUser
@@ -264,6 +365,10 @@ export async function GET(req: Request) {
         unproductiveSeconds: details?.unproductiveSeconds || 0,
         totalUsageSeconds: details?.totalUsageSeconds || 0,
         productivityPercent: details?.productivityPercent || 0,
+        productiveTimeToday: details?.productiveTimeToday || 0,
+        lastSeen: details?.lastSeen || 'Unknown',
+        lastSeenAt: details?.lastSeenAt || null,
+        onlineStatus: Boolean(details?.onlineStatus),
         websitesTracked: details?.websitesTracked || 0,
         totalVisits: details?.totalVisits || 0,
         mostVisitedWebsite: details?.mostVisitedWebsite || '',

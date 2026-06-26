@@ -27,29 +27,6 @@ import { supabase } from '@/lib/supabase';
 const ADMIN_EMAIL = 'bhuisompa001@gmail.com';
 const LOCAL_PREVIEW_MODE = process.env.NODE_ENV !== 'production';
 
-const FALLBACK_EMPLOYEES = [
-  {
-    id: 'preview-1',
-    name: 'Ayesha Rahman',
-    email: 'ayesha@example.com',
-    role: 'employee',
-    status: 'active',
-    todayTime: 5420,
-    websiteCount: 8,
-    totalVisits: 46
-  },
-  {
-    id: 'preview-2',
-    name: 'Imran Hossain',
-    email: 'imran@example.com',
-    role: 'hr',
-    status: 'inactive',
-    todayTime: 2380,
-    websiteCount: 5,
-    totalVisits: 19
-  }
-];
-
 export default function AdminDashboard() {
   const router = useRouter();
   const [stats, setStats] = useState({ totalUsers: 0, activeUsers: 0, onlineUsers: 0, totalHours: '0h' });
@@ -113,6 +90,19 @@ export default function AdminDashboard() {
     void loadData();
     void loadCurrentUser();
   }, [router]);
+
+  useEffect(() => {
+    const channel = supabase
+      .channel('admin-dashboard-tracking-snapshots')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'tracking_snapshots' }, () => {
+        void loadData();
+      })
+      .subscribe();
+
+    return () => {
+      void supabase.removeChannel(channel);
+    };
+  }, []);
 
   async function loadCurrentUser() {
     try {
@@ -184,12 +174,6 @@ export default function AdminDashboard() {
       }
     } catch (err: any) {
       console.error('Failed to load dashboard data:', err);
-      if (LOCAL_PREVIEW_MODE) {
-        setStats({ totalUsers: FALLBACK_EMPLOYEES.length, activeUsers: 1, onlineUsers: 1, totalHours: '2h 24m' });
-        setEmployees(FALLBACK_EMPLOYEES);
-        setError(null);
-        return;
-      }
       setError(err?.name === 'AbortError'
         ? 'Admin dashboard request timed out. Check /api/admin-dashboard and Supabase configuration.'
         : `Connection Error: ${err?.message || 'Could not connect to Supabase.'}`);
@@ -326,6 +310,22 @@ export default function AdminDashboard() {
     return `${secs}s`;
   };
 
+  const formatStatus = (emp: any) => {
+    if (emp?.onlineStatus) {
+      return {
+        dotClass: 'bg-emerald-500',
+        textClass: 'text-slate-900',
+        label: 'Active'
+      };
+    }
+
+    return {
+      dotClass: 'bg-slate-300',
+      textClass: 'text-slate-700',
+      label: `Last Seen: ${emp?.lastSeen || 'Unknown'}`
+    };
+  };
+
   if (loading) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-slate-50">
@@ -403,7 +403,7 @@ export default function AdminDashboard() {
                   <th className="px-6 py-4 text-xs font-bold uppercase tracking-wider text-slate-500">Employee</th>
                   <th className="px-6 py-4 text-xs font-bold uppercase tracking-wider text-slate-500">Role</th>
                   <th className="px-6 py-4 text-xs font-bold uppercase tracking-wider text-slate-500">Status</th>
-                  <th className="px-6 py-4 text-xs font-bold uppercase tracking-wider text-slate-500">Today's Time</th>
+                  <th className="px-6 py-4 text-xs font-bold uppercase tracking-wider text-slate-500">Productive Time</th>
                   <th className="px-6 py-4 text-xs font-bold uppercase tracking-wider text-slate-500">Websites</th>
                   <th className="px-6 py-4 text-xs font-bold uppercase tracking-wider text-slate-500">Visits</th>
                   <th className="px-6 py-4 text-xs font-bold uppercase tracking-wider text-slate-500 text-right">Actions</th>
@@ -429,10 +429,15 @@ export default function AdminDashboard() {
                       <RoleBadge role={emp.role} />
                     </td>
                     <td className="px-6 py-4">
-                      <div className="flex items-center gap-2">
-                        <div className={cn('h-2 w-2 rounded-full', emp.status === 'active' ? 'bg-emerald-500' : 'bg-rose-400')} />
-                        <span className="text-sm font-medium capitalize">{emp.status || 'inactive'}</span>
-                      </div>
+                      {(() => {
+                        const status = formatStatus(emp);
+                        return (
+                          <div className="flex items-center gap-2">
+                            <div className={cn('h-2 w-2 rounded-full', status.dotClass)} />
+                            <span className={cn('text-sm font-medium', status.textClass)}>{status.label}</span>
+                          </div>
+                        );
+                      })()}
                     </td>
                     <td className="px-6 py-4 text-sm font-bold text-slate-600">{formatSeconds(emp.todayTime)}</td>
                     <td className="px-6 py-4 text-sm font-bold text-slate-600">{emp.websiteCount ?? 0}</td>
